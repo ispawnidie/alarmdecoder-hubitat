@@ -14,52 +14,27 @@
  *  License for the specific language governing permissions and limitations
  *  under the License.
  *
+ *
+ *  Contact sensor that mirrors a panel state (Ready, Armed, Bypass, ...).
+ *  Events are sent by the AlarmDecoder service app.
  */
-
-/*
- * global support
- */
-import groovy.transform.Field
-@Field APPNAMESPACE = "alarmdecoder"
 
 metadata {
   definition(
     name: "AlarmDecoder status indicator",
     namespace: "alarmdecoder",
-    author: "Nu Tech Software Solutions, Inc.") {
+    author: "Nu Tech Software Solutions, Inc.",
+    importUrl: "https://raw.githubusercontent.com/ispawnidie/alarmdecoder-hubitat/master/drivers/alarmdecoder-status-indicator.groovy") {
     capability "Contact Sensor"
+    capability "Sensor"
   }
 
-  // tile definitions
-  tiles {
-    standardTile(
-      "contact",
-      "device.contact",
-      width: 2, height: 2,
-      canChangeIcon: true) {
-      state(
-        "closed",
-        label: '${name}',
-        icon: "st.contact.contact.closed",
-        backgroundColor: "#00a0dc")
-      state(
-        "open",
-        label: '${name}',
-        icon: "st.contact.contact.open",
-        backgroundColor: "#e86d13")
-    }
-    main "contact"
-    details "contact"
-  }
-
-  // preferences
   preferences {
     input(
       name: "invert",
       type: "bool",
-      title: "Invert signal [true,false]",
-      description: "Invert signal [true,false]." +
-      " Changes ON/OFF,OPEN/CLOSE,DETECTED/CLEAR",
+      title: "Invert signal",
+      description: "Invert signal. Changes ON/OFF, OPEN/CLOSE, DETECTED/CLEAR.",
       required: false)
     input(
       name: "zone",
@@ -67,24 +42,30 @@ metadata {
       title: "Zone Number",
       description: "Zone # required for zone events.",
       required: false)
-    }
   }
+}
 
-  /**
-   * installed()/updated()
-   *
-   * It is not possible for a service to access preferences directly so
-   * update device data value to allow access from parent
-   * using getDeviceDataByName getDataValue
-   * FIXME: diff ^ docs not clear.
-   *
-   */
-  def installed() {
-    updateDataValue("invert", invert.toString())
-    updateDataValue("zone", zone.toString())
-  }
+/**
+ * The parent app cannot read device preferences directly, so mirror them
+ * into device data values.
+ */
+def installed() {
+  syncDataValues()
+}
 
-  def updated() {
-    updateDataValue("invert", invert.toString())
-    updateDataValue("zone", zone.toString())
+def updated() {
+  syncDataValues()
+}
+
+private void syncDataValues() {
+  mirrorDataValue("invert", invert)
+  mirrorDataValue("zone", zone)
+}
+
+private void mirrorDataValue(String name, value) {
+  if (value == null || value.toString().trim() == "") {
+    removeDataValue(name)
+  } else {
+    updateDataValue(name, value.toString().trim())
   }
+}

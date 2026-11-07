@@ -14,119 +14,90 @@
  *  License for the specific language governing permissions and limitations
  *  under the License.
  *
+ *  Events for this device are sent by the AlarmDecoder service app. The app
+ *  routes panel zone events using the "Zone Number" preference, and 5800 RF
+ *  events using the "Serial Number" and loop preferences.
  */
-
-/*
- * global support
- */
-import groovy.transform.Field
-@Field APPNAMESPACE = "alarmdecoder"
 
 metadata {
   definition(
     name: "AlarmDecoder virtual motion detector",
     namespace: "alarmdecoder",
-    author: "Nu Tech Software Solutions, Inc.") {
+    author: "Nu Tech Software Solutions, Inc.",
+    importUrl: "https://raw.githubusercontent.com/ispawnidie/alarmdecoder-hubitat/master/drivers/alarmdecoder-virtual-motion-detector.groovy") {
     capability "Motion Sensor"
-	capability "Tamper Alert"
-	attribute "low_battery", "bool"
-	attribute "last_checkin", "number"
-  }
-
-  // tile definitions
-  tiles(scale: 2) {
-    multiAttributeTile(
-      name: "motion",
-      type: "generic",
-      width: 6, height: 4) {
-      tileAttribute(
-        "device.motion",
-        key: "PRIMARY_CONTROL") {
-        attributeState(
-          "active",
-          label: 'motion',
-          icon: "st.motion.motion.active",
-          backgroundColor: "#53a7c0")
-        attributeState(
-          "inactive",
-          label: 'no motion',
-          icon: "st.motion.motion.inactive",
-          backgroundColor: "#ffffff")
-      }
-    }
-    main "motion"
-    details "motion"
+    capability "Sensor"
+    capability "Tamper Alert"
+    attribute "low_battery", "enum", ["true", "false"]
+    attribute "last_checkin", "number"
   }
 
   preferences {
     input(
       name: "invert",
       type: "bool",
-      title: "Invert signal [true,false]",
-      description: "Invert signal [true,false]." +
-      " Changes ON/OFF,OPEN/CLOSE,DETECTED/CLEAR",
+      title: "Invert signal",
+      description: "Invert signal. Changes ON/OFF, OPEN/CLOSE, DETECTED/CLEAR.",
       required: false)
     input(
       name: "zone",
       type: "number",
       title: "Zone Number",
-      description: "Zone # required for zone events.",
+      description: "Panel zone # required for zone events.",
       required: false)
     input(
-      name: "serial", type:
-      "string", title: "Serial Number",
-      description: "The serial number of an RF device.",
+      name: "serial",
+      type: "string",
+      title: "Serial Number",
+      submitOnChange: true,
+      description: "The serial number of a 5800 RF device (optional).",
       required: false)
-	if (serial != null) {
+    if (serial) {
       input(
-        name: "zoneLoop", type:
-        "number", title: "Zone Loop", 
-		range: "1..4",
+        name: "zoneLoop",
+        type: "number",
+        title: "Zone Loop",
+        range: "1..4",
         description: "The loop to use for zone open/close.",
         required: true)
       input(
-        name: "tamperLoop", type:
-        "number", title: "Tamper Loop",
-		range: "1..4",
+        name: "tamperLoop",
+        type: "number",
+        title: "Tamper Loop",
+        range: "1..4",
         description: "The loop to use to detect tamper.",
-		defaultValue: 4,
-        required: false)	  
-	}	  
+        defaultValue: 4,
+        required: false)
+    }
   }
 }
 
 /**
- * installed()/updated()
- *
- * It is not possible for a service to access preferences directly so
- * update device data value to allow access from parent
- * using getDeviceDataByName getDataValue
- * FIXME: diff ^ docs not clear.
- *
+ * The parent app cannot read device preferences directly, so mirror them
+ * into device data values. Unset preferences remove the data value so the
+ * app never sees the string "null".
  */
 def installed() {
-  updateDataValue("invert", invert.toString())
-  updateDataValue("zone", zone.toString())
-  updateDataValue("serial", serial)
-  updateDataValue("zoneLoop", zoneLoop.toString())
-  updateDataValue("tamperLoop", tamperLoop.toString())
+  syncDataValues()
 }
 
 def updated() {
-  updateDataValue("invert", invert.toString())
-  updateDataValue("zone", zone.toString())
-  updateDataValue("serial", serial)
-  updateDataValue("zoneLoop", zoneLoop.toString())
-  updateDataValue("tamperLoop", tamperLoop.toString())
+  syncDataValues()
 }
 
-// FIXME: what?
-def parse(String description) {
-  if (description != "updated") {
-    if (parent.debug)
-      log.info "parse returned:${description}"
-    def pair = description.split(":")
-    createEvent(name: pair[0].trim(), value: pair[1].trim())
+private void syncDataValues() {
+  mirrorDataValue("invert", invert)
+  mirrorDataValue("zone", zone)
+  mirrorDataValue("serial", serial)
+  mirrorDataValue("zoneLoop", serial ? zoneLoop : null)
+  mirrorDataValue("tamperLoop", serial ? tamperLoop : null)
+}
+
+private void mirrorDataValue(String name, value) {
+  if (value == null || value.toString().trim() == "") {
+    removeDataValue(name)
+  } else {
+    updateDataValue(name, value.toString().trim())
   }
 }
 

@@ -1,5 +1,5 @@
 /**
- *  Virtual Carbon Monoxide Detector for alarm panel
+ *  Virtual Carbon Monoxide Detector for alarm panel zones
  *
  *  Copyright 2016-2019 Nu Tech Software Solutions, Inc.
  *
@@ -14,106 +14,90 @@
  *  License for the specific language governing permissions and limitations
  *  under the License.
  *
+ *  Events for this device are sent by the AlarmDecoder service app. The app
+ *  routes panel zone events using the "Zone Number" preference, and 5800 RF
+ *  events using the "Serial Number" and loop preferences.
  */
-
-/*
- * global support
- */
-import groovy.transform.Field
-@Field APPNAMESPACE = "alarmdecoder"
 
 metadata {
   definition(
     name: "AlarmDecoder virtual carbon monoxide detector",
     namespace: "alarmdecoder",
-    author: "Nu Tech Software Solutions, Inc.") {
+    author: "Nu Tech Software Solutions, Inc.",
+    importUrl: "https://raw.githubusercontent.com/ispawnidie/alarmdecoder-hubitat/master/drivers/alarmdecoder-virtual-carbon-monoxide-detector.groovy") {
     capability "CarbonMonoxideDetector"
-	capability "Tamper Alert"	
-	attribute "low_battery", "bool"
-	attribute "last_checkin", "number"
+    capability "Sensor"
+    capability "Tamper Alert"
+    attribute "low_battery", "enum", ["true", "false"]
+    attribute "last_checkin", "number"
   }
 
-  // tile definitions
-  tiles {
-    standardTile(
-      "sensor",
-      "device.smoke",
-      width: 2, height: 2,
-      canChangeIcon: true) {
-      state(
-        "clear",
-        label: '${name}',
-        icon: "st.alarm.smoke.clear",
-        backgroundColor: "#79b821")
-      state(
-        "detected",
-        label: '${name}',
-        icon: "st.alarm.smoke.smoke",
-        backgroundColor: "#e86d13")
-    }
-    main "sensor"
-    details "sensor"
-  }
-
-  // preferences
   preferences {
     input(
       name: "invert",
       type: "bool",
-      title: "Invert signal [true,false]",
-      description: "Invert signal [true,false]." +
-      " Changes ON/OFF,OPEN/CLOSE,DETECTED/CLEAR",
+      title: "Invert signal",
+      description: "Invert signal. Changes ON/OFF, OPEN/CLOSE, DETECTED/CLEAR.",
       required: false)
     input(
       name: "zone",
       type: "number",
       title: "Zone Number",
-      description: "Zone # required for zone events.",
+      description: "Panel zone # required for zone events.",
       required: false)
     input(
-      name: "serial", type:
-      "string", title: "Serial Number",
-      description: "The serial number of an RF device.",
+      name: "serial",
+      type: "string",
+      title: "Serial Number",
+      submitOnChange: true,
+      description: "The serial number of a 5800 RF device (optional).",
       required: false)
-	if (serial != null) {
+    if (serial) {
       input(
-        name: "zoneLoop", type:
-        "number", title: "Zone Loop", 
-		range: "1..4",
+        name: "zoneLoop",
+        type: "number",
+        title: "Zone Loop",
+        range: "1..4",
         description: "The loop to use for zone open/close.",
         required: true)
       input(
-        name: "tamperLoop", type:
-        "number", title: "Tamper Loop",
-		range: "1..4",
+        name: "tamperLoop",
+        type: "number",
+        title: "Tamper Loop",
+        range: "1..4",
         description: "The loop to use to detect tamper.",
-		defaultValue: 4,
-        required: false)	  
-	}	  
+        defaultValue: 4,
+        required: false)
+    }
   }
 }
 
 /**
- * installed()/updated()
- *
- * It is not possible for a service to access preferences directly so
- * update device data value to allow access from parent
- * using getDeviceDataByName getDataValue
- * FIXME: diff ^ docs not clear.
- *
+ * The parent app cannot read device preferences directly, so mirror them
+ * into device data values. Unset preferences remove the data value so the
+ * app never sees the string "null".
  */
 def installed() {
-  updateDataValue("invert", invert.toString())
-  updateDataValue("zone", zone.toString())
-  updateDataValue("serial", serial)
-  updateDataValue("zoneLoop", zoneLoop.toString())
-  updateDataValue("tamperLoop", tamperLoop.toString())
+  syncDataValues()
 }
 
 def updated() {
-  updateDataValue("invert", invert.toString())
-  updateDataValue("zone", zone.toString())
-  updateDataValue("serial", serial)
-  updateDataValue("zoneLoop", zoneLoop.toString())
-  updateDataValue("tamperLoop", tamperLoop.toString())
+  syncDataValues()
 }
+
+private void syncDataValues() {
+  mirrorDataValue("invert", invert)
+  mirrorDataValue("zone", zone)
+  mirrorDataValue("serial", serial)
+  mirrorDataValue("zoneLoop", serial ? zoneLoop : null)
+  mirrorDataValue("tamperLoop", serial ? tamperLoop : null)
+}
+
+private void mirrorDataValue(String name, value) {
+  if (value == null || value.toString().trim() == "") {
+    removeDataValue(name)
+  } else {
+    updateDataValue(name, value.toString().trim())
+  }
+}
+

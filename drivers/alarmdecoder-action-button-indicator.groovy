@@ -1,5 +1,5 @@
 /**
- *  Virtual Momentary Switch Indicator for alarm panel
+ *  Virtual Action Button for alarm panel
  *
  *  Copyright 2016-2019 Nu Tech Software Solutions, Inc.
  *
@@ -14,56 +14,29 @@
  *  License for the specific language governing permissions and limitations
  *  under the License.
  *
+ *
+ *  Momentary switch that sends a command (Arm, Chime, Panic, ...) to the panel
+ *  through the service app, and shows the matching panel state.
+ *  Events are sent by the AlarmDecoder service app.
  */
-
-/*
- * global support
- */
-import groovy.transform.Field
-@Field APPNAMESPACE = "alarmdecoder"
 
 metadata {
   definition(
     name: "AlarmDecoder action button indicator",
     namespace: "alarmdecoder",
-    author: "Nu Tech Software Solutions, Inc.") {
+    author: "Nu Tech Software Solutions, Inc.",
+    importUrl: "https://raw.githubusercontent.com/ispawnidie/alarmdecoder-hubitat/master/drivers/alarmdecoder-action-button-indicator.groovy") {
+    capability "Actuator"
     capability "Switch"
     capability "Momentary"
-    command "push"
-    command "on"
-    command "off"
   }
 
-  // tile definitions
-  tiles {
-    standardTile(
-      "switch",
-      "device.switch",
-      width: 2, height: 2,
-      canChangeIcon: true) {
-      state(
-        "off",
-        label: 'Push',
-        action: "momentary.push",
-        backgroundColor: "#ffffff")
-      state(
-        "on",
-        label: 'Push',
-        action: "momentary.push",
-        backgroundColor: "#00a0dc")
-    }
-    main "switch"
-    details "switch"
-  }
-
-  // preferences
   preferences {
     input(
       name: "invert",
       type: "bool",
-      title: "Invert signal [true,false]",
-      description: "Invert signal [true,false]." +
-      " Changes ON/OFF,OPEN/CLOSE,DETECTED/CLEAR",
+      title: "Invert signal",
+      description: "Invert signal. Changes ON/OFF, OPEN/CLOSE, DETECTED/CLEAR.",
       required: false)
     input(
       name: "zone",
@@ -72,33 +45,41 @@ metadata {
       description: "Zone # required for zone events.",
       required: false)
   }
-
 }
 
 /**
- * installed()/updated()
- *
- * It is not possible for a service to access preferences directly so
- * update device data value to allow access from parent
- * using getDeviceDataByName getDataValue
- * FIXME: diff ^ docs not clear.
- *
+ * The parent app cannot read device preferences directly, so mirror them
+ * into device data values.
  */
 def installed() {
-  updateDataValue("invert", invert.toString())
-  updateDataValue("zone", zone.toString())
+  syncDataValues()
 }
 
 def updated() {
-  updateDataValue("invert", invert.toString())
-  updateDataValue("zone", zone.toString())
+  syncDataValues()
 }
 
-// Send the request to the service for processing.
+private void syncDataValues() {
+  mirrorDataValue("invert", invert)
+  mirrorDataValue("zone", zone)
+}
+
+private void mirrorDataValue(String name, value) {
+  if (value == null || value.toString().trim() == "") {
+    removeDataValue(name)
+  } else {
+    updateDataValue(name, value.toString().trim())
+  }
+}
+
+/**
+ * Send the button press to the service app. The app decides what to do
+ * based on this device's network id and updates the switch state from the
+ * panel's reply.
+ */
 def push() {
-  if (parent.debug)
-    log.debug "AlarmDecoderActionButtonIndicator: Executing 'actionButton'"
-  parent.actionButton(device.getDeviceNetworkId())
+  parent?.logDebug("${device.displayName}: push")
+  parent?.actionButton(device.deviceNetworkId)
 }
 
 def on() {
