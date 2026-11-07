@@ -33,16 +33,29 @@ metadata {
    
   }
 
+  preferences {
+    input name: "logEnable", type: "bool", title: "Enable debug logging", description: "Automatically turns off after 30 minutes", defaultValue: false
+  }
+
+}
+
+private void logDebug(msg) {
+  if (settings?.logEnable) log.debug "${device.displayName}: ${msg}"
+}
+
+def logsOff() {
+  log.info "${device.displayName}: debug logging disabled"
+  device.updateSetting("logEnable", [value: "false", type: "bool"])
 }
 
 def parse(String description) {
-log.debug "in parse desc = $description"
+logDebug "in parse desc = $description"
 	def pair = description.split(":")
 	createEvent(name: pair[0].trim(), value: pair[1].trim())
 }
 
 def installed() {
-log.debug "in installed"
+logDebug "in installed"
 sendEvent(name: "status" , value: "All Ok")
 sendEvent(name: "lastAlert" , value: "None")
 sendEvent(name: "lastAlertType" , value: "None")
@@ -59,11 +72,11 @@ sendEvent(name: "lastAlertDateTime", value: "None")
 
 def deviceNotification(String desc)
 {
-log.debug "in device notification"
-log.debug "desc = $desc"
+logDebug "in device notification"
+logDebug "desc = $desc"
 
 def currentTime = new Date(now())
-//log.debug "got current time= $currentTime"
+//logDebug "got current time= $currentTime"
     
 def parts = desc.split(":")
 
@@ -72,37 +85,37 @@ if (parts.length == 2)
 
   def command = parts[0]
   def value = parts[1]
-  log.debug "command = *$command* value = *$value*"
+  logDebug "command = *$command* value = *$value*"
 
 switch (command)
 {
     case "Status":
-    log.debug "got status thestatus = *$value*"
+    logDebug "got status thestatus = *$value*"
     sendEvent(name: "armStatus", value: value)
     
     switch (value)
     {
     case " Disarmed":
-    	log.debug "Setting disarm tile"
+    	logDebug "Setting disarm tile"
         sendEvent(name: "armDisarm", value: "lite")
         sendEvent(name: "armStay", value: "unlite")
         sendEvent(name: "armAway", value: "unlite")
         break;
 
     case " Armed - Away":
-    	log.debug "setting arm away tile"
+    	logDebug "setting arm away tile"
         sendEvent(name: "armDisarm", value: "unlite")
         sendEvent(name: "armStay", value: "unlite")
         sendEvent(name: "armAway", value: "lite")
         break;
 
     case " Armed - Stay":
-    	log.debug "setting arm stay tile"
+    	logDebug "setting arm stay tile"
         sendEvent(name: "armDisarm", value: "unlite")
         sendEvent(name: "armStay", value: "lite")
         sendEvent(name: "armAway", value: "unlite")
         break;
-    default: log.debug "in default case value = $value"
+    default: logDebug "in default case value = $value"
     }
     
     sendEvent(name: "status" , value: "All Ok")
@@ -110,16 +123,16 @@ switch (command)
     break;
 
     case "Alert":
-        log.debug "got Alert message value = $value"
+        logDebug "got Alert message value = $value"
         break;
 
     case "Zones":
-      log.debug "Got Zone Message zone = $value"
+      logDebug "Got Zone Message zone = $value"
       sendEvent(name: "lastAlert", value: value)
       break;  
 
     case "AlertType":
-      log.debug "Got alert type Message = *$value*"
+      logDebug "Got alert type Message = *$value*"
 	  onPhysical()
       
       switch (value) {
@@ -152,7 +165,7 @@ switch (command)
       break;
   
       default:
-       log.debug "Got unknown Message!"
+       logDebug "Got unknown Message!"
        }
   
  } // have valid command
@@ -168,7 +181,9 @@ def updated()
 {
     
     def currentTime = new Date(now())
-   // log.debug "in updated"
+   // logDebug "in updated"
+    unschedule("logsOff")
+    if (settings?.logEnable) runIn(1800, "logsOff")
     sendEvent(name: "status" , value: "All Ok")
     sendEvent(name: "lastAlert" , value: "None")
     sendEvent(name: "lastAlertType" , value: "None")
@@ -189,7 +204,7 @@ def on() {
  
  
  def off() { 
- log.debug "in off"
+ logDebug "in off"
  	sendEvent(name: "switch", value: "off") 
  } 
 
@@ -199,7 +214,7 @@ def onPhysical() {
 }
 
 def offPhysical() {
-log.debug " in off physical"
+logDebug " in off physical"
 	sendEvent(name: "switch", value: "off", type: "physical")
 }
 
