@@ -14,38 +14,118 @@
  *  License for the specific language governing permissions and limitations
  *  under the License.
  *
+ *  V4.0.0 - Hubitat only. Removed SmartThings tiles. Added SecurityKeypad,
+ *    Initialize, connection health (networkStatus) and async HTTP requests.
+ *    The device network id is now the AlarmDecoder MAC address so UPnP push
+ *    notifications keep arriving after the appliance's IP address changes.
  */
 
-/**
- * global support
- */
+import groovy.json.JsonSlurper
 import groovy.transform.Field
-@Field APPNAMESPACE = "alarmdecoder"
 
-/**
- * Parsing support
- */
-import groovy.json.JsonSlurper;
-import groovy.util.XmlParser;
+// Number of zoneStatusN attributes. These hold the first N currently faulted
+// zones for dashboards. All faulted zones are listed in "faultedZones".
+@Field static final int MAX_ZONE_FAULT_TILES = 12
 
-/**
- * System Settings
- */
-// The max number of zone faults we can show on this page.
-// To adjust requires manual adding of the tiles into preferences.
-// FIXME: refactor remove static count.
-@Field MAX_ZONE_FAULT_TILES = 12
+// Hubitat accepts unsolicited LAN traffic (UPnP NOTIFY) on this port.
+@Field static final int HUB_LAN_PORT = 39501
 
-/**
- * preferences
- */
-preferences {
-  section() {
+// Mark the appliance offline if nothing has been heard from it for this long.
+// SUBSCRIBE is renewed every 5 minutes and its reply counts as contact.
+@Field static final long CONTACT_TIMEOUT_MS = 16 * 60 * 1000L
+
+@Field static final int HTTP_TIMEOUT_SECONDS = 10
+
+metadata {
+  definition(
+    name: "AlarmDecoder network appliance",
+    namespace: "alarmdecoder",
+    author: "Nu Tech Software Solutions, Inc.",
+    importUrl: "https://raw.githubusercontent.com/ispawnidie/alarmdecoder-hubitat/master/drivers/alarmdecoder-network-appliance.groovy") {
+
+    capability "Actuator"
+    capability "Initialize"
+    capability "Refresh"
+    capability "SecurityKeypad"
+
+    attribute(
+      "panel_state",
+      "enum",
+      [
+        "armed",
+        "armed_exit",
+        "armed_stay",
+        "armed_stay_exit",
+        "armed_night",
+        "armed_night_exit",
+        "disarmed",
+        "alarming",
+        "fire",
+        "ready",
+        "notready"
+      ]
+    )
+    attribute "armed", "enum", ["armed", "disarmed"]
+    attribute "alarmStatus", "enum", ["off", "stay", "away", "night"]
+    attribute "networkStatus", "enum", ["online", "offline"]
+    attribute "lastContact", "string"
+    attribute "faultedZones", "string"
+    attribute "panic_state", "string"
+    attribute "fire_state", "string"
+    attribute "aux_state", "string"
+    attribute "zoneStatus1", "string"
+    attribute "zoneStatus2", "string"
+    attribute "zoneStatus3", "string"
+    attribute "zoneStatus4", "string"
+    attribute "zoneStatus5", "string"
+    attribute "zoneStatus6", "string"
+    attribute "zoneStatus7", "string"
+    attribute "zoneStatus8", "string"
+    attribute "zoneStatus9", "string"
+    attribute "zoneStatus10", "string"
+    attribute "zoneStatus11", "string"
+    attribute "zoneStatus12", "string"
+
+    command "arm_stay"
+    command "arm_away"
+    command "arm_night"
+    command "arm_instant"
+    command "exit"
+    command "chime"
+    command "fire"
+    command "panic"
+    command "aux"
+    command "bypass", [[name: "zone*", type: "NUMBER", description: "Zone number to bypass"]]
+
+    // Kept for compatibility with rules created for the old SmartThings
+    // tiles. Prefer the commands above.
+    command "fire1"
+    command "fire2"
+    command "panic1"
+    command "panic2"
+    command "aux1"
+    command "aux2"
+    command "bypassN", ["string"]
+    command "bypass1"
+    command "bypass2"
+    command "bypass3"
+    command "bypass4"
+    command "bypass5"
+    command "bypass6"
+    command "bypass7"
+    command "bypass8"
+    command "bypass9"
+    command "bypass10"
+    command "bypass11"
+    command "bypass12"
+  }
+
+  preferences {
     input(
       name: "api_key",
       type: "password",
       title: "API Key",
-      description: "The key to access the REST API",
+      description: "The key to access the AlarmDecoder webapp REST API",
       required: true)
     input(
       name: "user_code",
@@ -64,644 +144,22 @@ preferences {
   }
 }
 
-/**
- * metadata
- */
-metadata {
-  definition(
-    name: "AlarmDecoder network appliance",
-    namespace: "alarmdecoder", author: "Nu Tech Software Solutions, Inc.") {
+/*** Lifecycle ***/
 
-    // capabilities
-    capability "Refresh"
-
-    // attributes
-    attribute(
-      "panel_state",
-      "enum",
-      [
-        "armed",
-        "armed_stay",
-        "armed_stay_exit",
-		    "armed_night",
-		    "armed_night_exit",
-        "disarmed",
-        "alarming",
-        "fire",
-        "ready",
-        "notready"
-      ]
-    )
-    attribute "armed", "enum", ["armed", "disarmed"]
-    attribute "panic_state", "string"
-    attribute "zoneStatus1", "string"
-    attribute "zoneStatus2", "string"
-    attribute "zoneStatus3", "string"
-    attribute "zoneStatus4", "string"
-    attribute "zoneStatus5", "string"
-    attribute "zoneStatus6", "string"
-    attribute "zoneStatus7", "string"
-    attribute "zoneStatus8", "string"
-    attribute "zoneStatus9", "string"
-    attribute "zoneStatus10", "string"
-    attribute "zoneStatus11", "string"
-    attribute "zoneStatus12", "string"
-
-    // commands
-    command "disarm"
-    command "arm_stay"
-    command "exit"
-    command "arm_away"
-	  command "arm_night"
-    command "arm_instant"
-    command "fire"
-    command "fire1"
-    command "fire2"
-    command "panic"
-    command "panic1"
-    command "panic2"
-    command "aux"
-    command "aux1"
-    command "aux2"
-    command "chime"
-    command "bypass", ["number"]
-    command "bypassN", ["string"]
-    command "bypass1"
-    command "bypass2"
-    command "bypass3"
-    command "bypass4"
-    command "bypass5"
-    command "bypass6"
-    command "bypass7"
-    command "bypass8"
-    command "bypass9"
-    command "bypass10"
-    command "bypass11"
-    command "bypass12"
-  }
-
-  simulator {
-    // TODO: define status and reply messages here
-  }
-
-  // tile definitions
-  tiles(scale: 2) {
-
-    // top alarm status box
-    multiAttributeTile(
-      name: "status",
-      type: "generic",
-      width: 6, height: 4) {
-      tileAttribute(
-        "device.panel_state",
-        key: "PRIMARY_CONTROL") {
-        attributeState(
-          "armed",
-          label: 'Armed',
-          icon: "st.security.alarm.on",
-          backgroundColor: "#ffa81e")
-        attributeState(
-          "armed_exit",
-          label: 'Armed (exit-now)',
-          icon: "st.nest.nest-away",
-          backgroundColor:
-          "#ffa81e")
-        attributeState(
-          "armed_stay",
-          label: 'Armed (stay)',
-          icon: "st.security.alarm.on",
-          backgroundColor: "#ffa81e")
-        attributeState(
-          "armed_stay_exit",
-          label: 'Armed (exit-now)',
-          icon: "st.nest.nest-away",
-          backgroundColor: "#ffa81e")
-		attributeState(
-          "armed_night",
-          label: 'Armed (night)',
-          icon: "st.security.alarm.on",
-          backgroundColor: "#ffa81e")
-        attributeState(
-          "armed_night_exit",
-          label: 'Armed (exit-now)',
-          icon: "st.nest.nest-away",
-          backgroundColor: "#ffa81e")
-        attributeState(
-          "disarmed",
-          label: 'Disarmed',
-          icon: "st.security.alarm.off",
-          backgroundColor: "#79b821",
-          defaultState: true)
-        attributeState(
-          "alarming",
-          label: 'Alarming!',
-          icon: "st.home.home2",
-          backgroundColor: "#ff4000")
-        attributeState(
-          "fire",
-          label: 'Fire!',
-          icon: "st.contact.contact.closed",
-          backgroundColor: "#ff0000")
-        attributeState(
-          "ready",
-          label: 'Ready',
-          icon: "st.security.alarm.off",
-          backgroundColor: "#79b821")
-        attributeState(
-          "notready",
-          label: 'Not Ready',
-          icon: "st.security.alarm.off",
-          backgroundColor: "#e86d13")
-      }
-    }
-
-    // arm/disarm button #1
-    standardTile(
-      "arm_disarm",
-      "device.panel_state",
-      inactiveLabel: false,
-      width: 2, height: 2) {
-      state(
-        "armed",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_exit",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_stay",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_stay_exit",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_night",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-	  state(
-        "armed_night_exit",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")	
-      state(
-        "disarmed",
-        action: "arm_away",
-        icon: "st.security.alarm.on",
-        label: "AWAY")
-      state(
-        "alarming",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "fire",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "ready",
-        action: "arm_away",
-        icon: "st.security.alarm.on",
-        label: "AWAY")
-      state(
-        "notready",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-    }
-
-    // arm/disarm button #2
-    standardTile(
-      "stay_disarm",
-      "device.panel_state",
-      inactiveLabel: false,
-      width: 2, height: 2) {
-      state(
-        "armed",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_exit",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_stay",
-        action: "exit",
-        icon: "st.nest.nest-away",
-        label: "EXIT")
-      state(
-        "armed_stay_exit",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "armed_night",
-        action: "exit",
-        icon: "st.nest.nest-away",
-        label: "EXIT")
-      state(
-        "armed_night_exit",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "disarmed",
-        action: "arm_stay",
-        icon: "st.Home.home4",
-        label: "STAY")
-      state(
-        "alarming",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "fire",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-      state(
-        "ready",
-        action: "arm_stay",
-        icon: "st.security.alarm.on",
-        label: "STAY")
-      state(
-        "notready",
-        action: "disarm",
-        icon: "st.security.alarm.off",
-        label: "DISARM")
-    }
-
-    // panic buttons Touch 3 times to trigger an alarm.
-    // panic police
-    standardTile(
-      "panic",
-      "device.panic_state",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state(
-        "default",
-        icon: "http://www.alarmdecoder.com/st/ad2-police.png",
-        label: "PANIC",
-        nextState: "panic1",
-        action: "panic1")
-      state(
-        "panic1",
-        icon: "http://www.alarmdecoder.com/st/ad2-police.png",
-        label: "PANIC",
-        nextState: "panic2",
-        action: "panic2",
-        backgroundColor: "#ffa81e")
-      state(
-        "panic2",
-        icon: "http://www.alarmdecoder.com/st/ad2-police.png",
-        label: "PANIC", nextState: "default",
-        action: "panic",
-        backgroundColor: "#ff4000"
-      )
-    }
-
-    // panic fire
-    standardTile(
-      "fire",
-      "device.fire_state",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state(
-        "default",
-        icon: "http://www.alarmdecoder.com/st/ad2-fire.png",
-        label: "FIRE",
-        nextState: "fire1",
-        action: "fire1")
-      state(
-        "fire1",
-        icon: "http://www.alarmdecoder.com/st/ad2-fire.png",
-        label: "FIRE",
-        nextState: "fire2",
-        action: "fire2",
-        backgroundColor: "#ffa81e")
-      state(
-        "fire2",
-        icon: "http://www.alarmdecoder.com/st/ad2-fire.png",
-        label: "FIRE",
-        nextState: "default",
-        action: "fire",
-        backgroundColor: "#ff4000")
-    }
-
-    // panic medical
-    standardTile(
-      "aux",
-      "device.aux_state",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state(
-        "default",
-        icon: "http://www.alarmdecoder.com/st/ad2-aux.png",
-        label: "AUX",
-        nextState: "aux1",
-        action: "aux1")
-      state(
-        "aux1",
-        icon: "http://www.alarmdecoder.com/st/ad2-aux.png",
-        label: "AUX",
-        nextState: "aux2",
-        action: "aux2",
-        backgroundColor: "#ffa81e")
-      state(
-        "aux2",
-        icon: "http://www.alarmdecoder.com/st/ad2-aux.png",
-        label: "AUX",
-        nextState: "default",
-        action: "aux",
-        backgroundColor: "#ff4000")
-    }
-
-    // zone fault tiles show a list of faulted zones where pressing will bypass.
-    // #1
-    valueTile(
-      "zoneStatus1",
-      "device.zoneStatus1",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass1",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #2
-    valueTile(
-      "zoneStatus2",
-      "device.zoneStatus2",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass2",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #3
-    valueTile(
-      "zoneStatus3",
-      "device.zoneStatus3",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass3",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #4
-    valueTile(
-      "zoneStatus4",
-      "device.zoneStatus4",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass4",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #5
-    valueTile(
-      "zoneStatus5",
-      "device.zoneStatus5",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass5",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #6
-    valueTile(
-      "zoneStatus6",
-      "device.zoneStatus6",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass6",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #7
-    valueTile(
-      "zoneStatus7",
-      "device.zoneStatus7",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass7",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #8
-    valueTile(
-      "zoneStatus8",
-      "device.zoneStatus8",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass8",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #9
-    valueTile(
-      "zoneStatus9",
-      "device.zoneStatus9",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass9",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #10
-    valueTile(
-      "zoneStatus10",
-      "device.zoneStatus10",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass10",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #11
-    valueTile(
-      "zoneStatus11",
-      "device.zoneStatus11",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass11",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-    // #12
-    valueTile(
-      "zoneStatus12",
-      "device.zoneStatus12",
-      inactiveLabel: false,
-      width: 1, height: 1) {
-      state "default",
-        icon: "",
-        label: '${currentValue}',
-        action: "bypass12",
-        nextState: "default",
-        backgroundColors: [
-          [value: 0, color: "#ffffff"],
-          [value: 1, color: "#ff0000"],
-          [value: 99, color: "#ff0000"]
-        ]
-    }
-
-    // refresh button (PULL results from server)
-    // FIXME: Not need as things improve. Make smaller still useful for testing.
-    standardTile(
-      "refresh",
-      "device.refresh",
-      inactiveLabel: false,
-      decoration: "flat",
-      width: 1, height: 1) {
-      state "default",
-        action: "refresh.refresh",
-        icon: "st.secondary.refresh",
-        label: "refresh"
-    }
-
-    // main page layout and order
-    main(["status"])
-    details(
-      ["status",
-        "arm_disarm",
-        "stay_disarm",
-        "panic",
-        "fire",
-        "aux",
-        "refresh",
-        "zoneStatus1",
-        "zoneStatus2",
-        "zoneStatus3",
-        "zoneStatus4",
-        "zoneStatus5",
-        "zoneStatus6",
-        "zoneStatus7",
-        "zoneStatus8",
-        "zoneStatus9",
-        "zoneStatus10",
-        "zoneStatus11",
-        "zoneStatus12"
-      ])
-  }
-}
-
-
-/*** Event Handlers ***/
-
-/**
- * installed()
- *
- * Called when the device page reports an install event.
- */
 def installed() {
-  // FIXME: refactor remove for() with fixed #
-  for (def i = 1; i <= 12; i++)
-    sendEvent(name: "zoneStatus${i}", value: "", displayed: false)
+  for (int i = 1; i <= MAX_ZONE_FAULT_TILES; i++)
+    sendEvent(name: "zoneStatus${i}", value: "")
+  sendEvent(name: "faultedZones", value: "")
+  sendEvent(name: "panic_state", value: "default")
+  sendEvent(name: "fire_state", value: "default")
+  sendEvent(name: "aux_state", value: "default")
+  sendEvent(name: "maxCodes", value: 0)
+  sendEvent(name: "codeLength", value: 0)
+  initialize()
 }
 
-/**
- * uninstalled()
- *
- * Called when the device page reports an uninstall event.
- */
-def uninstalled() {
-  parent.logTrace "--- handler.uninstalled"
-}
-
-/**
- * update()
- *
- * Called when the device settings are udpated.
- */
 def updated() {
-  parent.logTrace "--- handler.updated"
+  logTrace("updated")
 
   state.faulted_zones = []
 
@@ -725,119 +183,148 @@ def updated() {
   state.alarm_status = "off"
   state.armed = false
 
-  // internal state vars
-  state.panic_started = null;
-  state.fire_started = null;
-  state.aux_started = null;
+  state.panic_started = null
+  state.fire_started = null
+  state.aux_started = null
 
-  // FIXME: refactor remove for() with fixed #
-  for (def i = 1; i <= 12; i++)
-    sendEvent(name: "zoneStatus${i}", value: "", displayed: false)
+  for (int i = 1; i <= MAX_ZONE_FAULT_TILES; i++)
+    sendEvent(name: "zoneStatus${i}", value: "")
 
-  // subscribe if settings change
-  unschedule()
-  // subscribe right now
-  subscribeNotifications()
-  // resub every 5min
-  runEvery5Minutes(subscribeNotifications)
+  initialize()
 }
 
 /**
- * parse()
- *
- * Core event parse routine for Device Handler
- *
- * Expect:
- *  Response to SUBSCRIBE requests to the AlarmDecoder.
- *
- * Test from the AlarmDecoder Appliance:
- *   curl
- *
+ * Called on install, on preference save, at hub startup (Initialize
+ * capability) and by the service app after a relink or address change.
  */
-def parse(String description) {
-  parent.logDebug("--- parse: em: ${em}, description: '${description}'")
-
-  // Create our events array we will append into.
-  def events = []
-
-  // Parse the event string.
-  def em = parent.parseEventMessage(description)
-
-  // Is this a message from the active registerd AlarmDecoder?
-  // FIXME: Add some security test.
-  if (em.mac != getDataValue("mac")) {
-    if (parent.debug)
-      log.info("--- parse: skipping event incorrect mac address: ${em.mac}")
-    return events
-  } else {
-    if (parent.debug)
-      log.info("--- parse: event match mac: ${em.mac}")
-  }
-
-  // If we initiate a connection it will get an id.
-  // Just grab the last for loging.
-  def rID = ((em.requestId?.length() > 12) ?
-    em.requestId.substring(em.requestId.length() - 12) : "000000000000")
-
-  // We need headers for a valid request.
-  if (!em.headers) {
-    if (parent.debug)
-      log.info("--- parse: skipping event missing headers from ${em.mac}")
-    return events
-  }
-
-  parent.logTrace("--- parse: mac: ${event?.mac} requestId: ${rID}")
-
-  // The body may be empty.
-  def bodyString = (em.body) ? em.body : ""
-
-  // Verbose debug details.
-  parent.logDebug("--- parse: type: ${em.contenttype} " +
-    "rid: ${em.requestId}, headers: ${em.headers}")
-  parent.logDebug("--- parse: rid: ${rID}, body: ${em.body}")
-
-  def type = em.contenttype
-
-  // Based upon content type process the content.
-  if (type?.contains("json") && bodyString.length()) {
-    parse_json(bodyString).each {
-      e-> events << e
-    }
-  } else if (type?.contains("xml") && bodyString.length()) {
-    parse_xml(bodyString).each {
-      e-> events << e
-    }
-  } else {
-    parent.logDebug("--- parse: unknown type: ${type}")
-  }
-
-  parent.logDebug("--- parse: results rid:${rID}, events: ${events}")
-
-  return events
+def initialize() {
+  logTrace("initialize: urn=${getDataValue('urn')}")
+  unschedule()
+  subscribeNotifications()
+  runEvery5Minutes("subscribeNotifications")
+  runIn(5, "refresh")
 }
 
+def uninstalled() {
+  logTrace("uninstalled")
+  unschedule()
+}
 
+/*** Incoming LAN messages ***/
+
+/**
+ * UPnP NOTIFY push messages from the AlarmDecoder webapp arrive here.
+ * Hubitat routes them to this device because its network id is the
+ * appliance's MAC address.
+ */
+def parse(String description) {
+  def msg = parseLanMessage(description)
+  String mac = msg?.mac?.toString()?.toUpperCase()
+  String myMac = getDataValue("mac")?.toUpperCase()
+
+  if (mac && myMac && mac != myMac) {
+    logDebug("parse: skipping message from unexpected mac ${mac}")
+    return []
+  }
+
+  markOnline()
+
+  String body = msg?.body ?: ""
+  String type = headerValue(msg?.headers, "Content-Type")
+  logDebug("parse: type: ${type} headers: ${msg?.headers} body: ${body}")
+
+  def events = []
+  if (body) {
+    if (type?.contains("json")) {
+      events = parse_json(body)
+    } else if (type?.contains("xml") || body.trim().startsWith("<")) {
+      events = parse_xml(body)
+    } else {
+      logDebug("parse: unknown content type: ${type}")
+    }
+  }
+
+  logDebug("parse: events: ${events}")
+  return events
+}
 
 /*** Capabilities ***/
 
 def refresh() {
-  parent.logTrace("--- handler.refresh")
+  logTrace("refresh")
 
-  def urn = getDataValue("urn")
-  def apikey = _get_api_key()
+  String urn = getDataValue("urn")
+  if (!urn || !_get_api_key()) {
+    log.warn("${device.displayName}: refresh skipped, missing address or API key")
+    return
+  }
 
-  return hub_http_get(urn, "/api/v1/alarmdecoder?apikey=${apikey}")
+  try {
+    asynchttpGet(
+      "handleRefreshResponse",
+      [
+        uri: "http://${urn}",
+        path: "/api/v1/alarmdecoder",
+        query: [apikey: _get_api_key()],
+        timeout: HTTP_TIMEOUT_SECONDS
+      ]
+    )
+  } catch (e) {
+    connectionFailed("refresh: ${e}")
+  }
+}
+
+def handleRefreshResponse(resp, data) {
+  if (resp.hasError()) {
+    connectionFailed("refresh failed: status ${resp.status} ${resp.getErrorMessage()}")
+    return
+  }
+  markOnline()
+  parse_json(resp.data?.toString() ?: "").each { e -> sendEvent(e) }
+}
+
+/*** SecurityKeypad ***/
+
+def armAway(delay = null) {
+  arm_away()
+}
+
+def armHome(delay = null) {
+  arm_stay()
+}
+
+def armNight(delay = null) {
+  arm_night()
+}
+
+def setCode(codeposition, pincode, name = null) {
+  log.warn("${device.displayName}: user codes are managed at the alarm panel")
+}
+
+def deleteCode(codeposition) {
+  log.warn("${device.displayName}: user codes are managed at the alarm panel")
+}
+
+def getCodes() {
+  log.warn("${device.displayName}: user codes are managed at the alarm panel")
+}
+
+def setCodeLength(pincodelength) {
+  log.warn("${device.displayName}: code length is managed at the alarm panel")
+}
+
+def setEntryDelay(entranceDelay) {
+  log.warn("${device.displayName}: entry delay is managed at the alarm panel")
+}
+
+def setExitDelay(exitDelay) {
+  log.warn("${device.displayName}: exit delay is managed at the alarm panel")
 }
 
 /*** Commands ***/
-/**
- * disarm()
- * Sends a disarm command to the panel
- * TODO: Add security
- */
-def disarm() {
-  parent.logTrace("--- disarm")
 
+def disarm() {
+  logTrace("disarm")
   def user_code = _get_user_code()
   def keys = ""
 
@@ -846,20 +333,13 @@ def disarm() {
   else if (settings.panel_type == "DSC")
     keys = "${user_code}"
   else
-    log.warn("--- disarm: unknown panel_type.")
+    log.warn("disarm: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * exit()
- * Sends a exit command to the panel
- * TODO: Add security
- */
 def exit() {
-  parent.logTrace("--- exit")
-
-  def user_code = _get_user_code()
+  logTrace("exit")
   def keys = ""
 
   if (settings.panel_type == "ADEMCO")
@@ -867,18 +347,13 @@ def exit() {
   else if (settings.panel_type == "DSC")
     keys = "S8"
   else
-    log.warn("--- exit: unknown panel_type.")
+    log.warn("exit: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * arm_away()
- * Sends an arm away command to the panel
- */
 def arm_away() {
-  parent.logTrace("--- arm_away")
-
+  logTrace("arm_away")
   def user_code = _get_user_code()
   def keys = ""
 
@@ -887,18 +362,13 @@ def arm_away() {
   else if (settings.panel_type == "DSC")
     keys = "<S5>"
   else
-    log.warn("--- arm_away: unknown panel_type.")
+    log.warn("arm_away: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * arm_stay()
- * Sends an arm stay command to the panel
- */
 def arm_stay() {
-  parent.logTrace("--- arm_stay")
-
+  logTrace("arm_stay")
   def user_code = _get_user_code()
   def keys = ""
 
@@ -907,18 +377,13 @@ def arm_stay() {
   else if (settings.panel_type == "DSC")
     keys = "<S4>"
   else
-    log.warn("--- arm_stay: unknown panel_type.")
+    log.warn("arm_stay: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * arm_night()
- * Sends an arm night command to the panel
- */
 def arm_night() {
-  parent.logTrace("--- arm_night")
-
+  logTrace("arm_night")
   def user_code = _get_user_code()
   def keys = ""
 
@@ -927,18 +392,13 @@ def arm_night() {
   else if (settings.panel_type == "DSC")
     keys = "<S4>*1"
   else
-    log.warn("--- arm_night: unknown panel_type.")
+    log.warn("arm_night: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * arm_instant()
- * Sends an arm instant command to the panel
- */
 def arm_instant() {
-  parent.logTrace("--- arm_instant")
-
+  logTrace("arm_instant")
   def user_code = _get_user_code()
   def keys = ""
 
@@ -947,137 +407,74 @@ def arm_instant() {
   else if (settings.panel_type == "DSC")
     keys = "<S4>*9"
   else
-    log.warn("--- arm_instant: unknown panel_type.")
+    log.warn("arm_instant: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * fire()
- * Sends an fire alarm command to the panel
- */
 def fire() {
-  parent.logTrace("--- fire")
+  logTrace("fire")
   state.fire_started = null
-  def keys = "<S1>"
-  return send_keys(keys)
+  send_keys("<S1>")
 }
 
-def fire1() {
-  state.fire_started = new Date().time
-
-  runIn(10, checkFire);
-
-  parent.logTrace("Fire stage 1: ${state.fire_started}")
-}
-
-def fire2() {
-  state.fire_started = new Date().time
-
-  runIn(10, checkFire);
-
-  parent.logTrace("Fire stage 2: ${state.fire_started}")
-}
-
-def checkFire() {
-  parent.logTrace("checkFire");
-  if (state.fire_started != null && new Date().time - state.fire_started >= 5) {
-    sendEvent(name: "fire_state", value: "default", isStateChange: true)
-    parent.logTrace("clearing fire")
-  }
-}
-
-/**
- * panic()
- * Sends an panic alarm command to the panel
- */
 def panic() {
-  parent.logTrace("--- panic")
+  logTrace("panic")
   state.panic_started = null
-  def keys = "<S2>"
-  return send_keys(keys)
+  send_keys("<S2>")
 }
 
-def panic1() {
-  state.panic_started = new Date().time
-
-  runIn(10, checkPanic);
-
-  parent.logTrace("Panic stage 1: ${state.panic_started}")
-}
-
-def panic2() {
-  state.panic_started = new Date().time
-
-  runIn(10, checkPanic);
-
-  parent.logTrace("Panic stage 2: ${state.panic_started}")
-}
-
-def checkPanic() {
-  parent.logTrace("checkPanic");
-  if (state.panic_started != null &&
-    new Date().time - state.panic_started >= 5) {
-    sendEvent(name: "panic_state", value: "default", isStateChange: true);
-    parent.logTrace("clearing panic");
-  }
-}
-
-/**
- * aux()
- * Sends an aux alarm command to the panel
- */
 def aux() {
-  parent.logTrace("--- aux")
+  logTrace("aux")
   state.aux_started = null
-  def keys = "<S3>"
-  return send_keys(keys)
+  send_keys("<S3>")
 }
 
-def aux1() {
-  state.aux_started = new Date().time
+/*
+ * Multi-step panic/fire/aux helpers from the SmartThings tiles. Each step
+ * records a timestamp and the state resets to "default" after 10 seconds.
+ */
+def fire1() { startStage("fire") }
+def fire2() { startStage("fire") }
+def panic1() { startStage("panic") }
+def panic2() { startStage("panic") }
+def aux1() { startStage("aux") }
+def aux2() { startStage("aux") }
 
-  runIn(10, checkAux);
-
-  parent.logTrace("Aux stage 1: ${state.aux_started}")
+private void startStage(String name) {
+  String key = "${name}_started".toString()
+  state[key] = now()
+  runIn(10, "check${name.capitalize()}".toString())
+  logTrace("${name} stage: ${state[key]}")
 }
 
-def aux2() {
-  state.aux_started = new Date().time
+def checkFire() { clearStage("fire") }
+def checkPanic() { clearStage("panic") }
+def checkAux() { clearStage("aux") }
 
-  runIn(10, checkAux);
-
-  parent.logTrace("Aux stage 2: ${state.aux_started}")
-}
-
-def checkAux() {
-  parent.logTrace("checkAux");
-  if (state.aux_started != null && new Date().time - state.aux_started >= 5) {
-    sendEvent(name: "aux_state", value: "default", isStateChange: true);
-    parent.logTrace("clearing aux");
+private void clearStage(String name) {
+  def started = state["${name}_started".toString()]
+  if (started != null && now() - (started as Long) >= 5000) {
+    sendEvent(name: "${name}_state", value: "default", isStateChange: true)
+    logTrace("clearing ${name}")
   }
 }
 
-/**
- * bypassX()
- *
- */
-def bypass1(evt) { bypassN(1) }
-def bypass2(evt) { bypassN(2) }
-def bypass3(evt) { bypassN(3) }
-def bypass4(evt) { bypassN(4) }
-def bypass5(evt) { bypassN(5) }
-def bypass6(evt) { bypassN(6) }
-def bypass7(evt) { bypassN(7) }
-def bypass8(evt) { bypassN(8) }
-def bypass9(evt) { bypassN(9) }
-def bypass10(evt) { bypassN(10) }
-def bypass11(evt) { bypassN(11) }
-def bypass12(evt) { bypassN(12) }
+def bypass1() { bypassN(1) }
+def bypass2() { bypassN(2) }
+def bypass3() { bypassN(3) }
+def bypass4() { bypassN(4) }
+def bypass5() { bypassN(5) }
+def bypass6() { bypassN(6) }
+def bypass7() { bypassN(7) }
+def bypass8() { bypassN(8) }
+def bypass9() { bypassN(9) }
+def bypass10() { bypassN(10) }
+def bypass11() { bypassN(11) }
+def bypass12() { bypassN(12) }
 
 /**
- * bypassN()
- * Bypass the zone indicated on this tile
+ * Bypass the zone currently shown in zoneStatusN.
  */
 def bypassN(szValue) {
   def zone = device.currentValue("zoneStatus${szValue}")
@@ -1085,35 +482,30 @@ def bypassN(szValue) {
 }
 
 /**
- * bypass()
  * Send a bypass command to the panel for a zone number.
  */
 def bypass(zone) {
-  parent.logTrace("--- bypass ${zone}")
+  logTrace("bypass ${zone}")
 
-  // if no zone then skip
-  if (!zone.toInteger())
-    return;
+  if (zone == null || !zone.toString().isInteger() || !zone.toString().toInteger())
+    return
 
   def user_code = _get_user_code()
+  def zoneStr = zone.toString().toInteger().toString().padLeft(2, "0")
   def keys = ""
 
   if (settings.panel_type == "ADEMCO")
-    keys = "${user_code}6" + zone.toString().padLeft(2, "0") + "*"
+    keys = "${user_code}6${zoneStr}*"
   else if (settings.panel_type == "DSC")
-    keys = "*1" + zone.toString().padLeft(2, "0") + "#"
+    keys = "*1${zoneStr}#"
   else
-    log.warn("--- bypass: unknown panel_type.")
+    log.warn("bypass: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
-/**
- * chime()
- * Sends a chime command to the panel
- */
 def chime() {
-  parent.logTrace("--- chime")
+  logTrace("chime")
   def user_code = _get_user_code()
   def keys = ""
 
@@ -1122,27 +514,27 @@ def chime() {
   else if (settings.panel_type == "DSC")
     keys = "<S6>"
   else
-    log.warn("--- chime: unknown panel_type.")
+    log.warn("chime: unknown panel_type.")
 
-  return send_keys(keys)
+  send_keys(keys)
 }
 
 /*** Business Logic ***/
 
 /**
- * update_state(data)
- * process a state change event object from xml/json parser
+ * Process a panel state object from the xml/json parsers and return the
+ * list of events to send.
  */
 def update_state(data) {
-  parent.logTrace("--- update_state")
+  logTrace("update_state")
   def forceguiUpdate = false
   def skipstate = false
   def events = []
 
   /*
    * WARNING: we can get the Ready and Armed state events out of
-   * order thanks to async io and the fact that both events occure
-   * from a single AD2 message.Handle this gracefully to avoid client
+   * order thanks to async io and the fact that both events occur
+   * from a single AD2 message. Handle this gracefully to avoid client
    * update glitches.
    *
    * [10000001000100003A0-],008,[f702...],"****DISARMED****  Ready to Arm  "
@@ -1150,331 +542,198 @@ def update_state(data) {
    * [10000101000100003A0-],008,[f702...],"****DISARMED****  Ready to Arm  "
    */
 
-  // Event Type 14 CID send raw data upstream if we find one
+  // Event Type 14 CID send raw data upstream
   if (data.eventid == 14) {
-    events << createEvent(
-      name: "cid-set",
-      value: data.rawmessage,
-      displayed: true,
-      isStateChange: true)
-
-    // do not trust state for these messages they could be out of sync.
-    skipstate = true;
+    events << createEvent(name: "cid-set", value: data.rawmessage, isStateChange: true)
+    skipstate = true
   }
 
-  // Event Type 17 RFX send eventmessage upstream if we find one
+  // Event Type 17 RFX send eventmessage upstream
   if (data.eventid == 17) {
-    events << createEvent(
-      name: "rfx-set",
-      value: data.eventmessage,
-      displayed: true,
-      isStateChange: true)
-    // do not trust state for these messages they could be out of sync.
-    skipstate = true;
+    events << createEvent(name: "rfx-set", value: data.eventmessage, isStateChange: true)
+    skipstate = true
   }
 
-  // Event Type 18 EXP/REL send eventmessage upstream if we find one
+  // Event Type 18 EXP/REL send eventmessage upstream
   if (data.eventid == 18) {
-    events << createEvent(
-      name: "exp-set",
-      value: data.eventmessage,
-      displayed: true,
-      isStateChange: true)
-    // do not trust state for these messages they could be out of sync.
-    skipstate = true;
+    events << createEvent(name: "exp-set", value: data.eventmessage, isStateChange: true)
+    skipstate = true
   }
 
-  // Event Type 19 AUI send eventmessage upstream if we find one
+  // Event Type 19 AUI send eventmessage upstream
   if (data.eventid == 19) {
-    events << createEvent(
-      name: "aui-set",
-      value: data.eventmessage,
-      displayed: true,
-      isStateChange: true)
-    // do not trust state for these messages they could be out of sync.
-    skipstate = true;
+    events << createEvent(name: "aui-set", value: data.eventmessage, isStateChange: true)
+    skipstate = true
   }
 
   // Event Type 5 Bypass
   if (data.eventid == 5) {
-    events << createEvent(
-      name: "bypass-set",
-      value: (data.panel_bypassed ? "on" : "off"),
-      displayed: true,
-      isStateChange: true)
-    // do not trust state for these messages they could be out of sync.
-    skipstate = true;
+    events << createEvent(name: "bypass-set", value: (data.panel_bypassed ? "on" : "off"), isStateChange: true)
+    skipstate = true
   }
 
   // Event Type 16 Chime
   if (data.eventid == 16) {
-    events << createEvent(
-      name: "chime-set",
-      value: (data.panel_chime ? "on" : "off"),
-      displayed: true,
-      isStateChange: true)
-    // do not trust state for these messages they could be out of sync.
-    skipstate = true;
+    events << createEvent(name: "chime-set", value: (data.panel_chime ? "on" : "off"), isStateChange: true)
+    skipstate = true
   }
 
-  // SKIP if needed
-  if (skipstate != true) {
-    // Get our armed state from our new state data
-    def armed = data.panel_armed ||
-      (data.panel_armed_stay != null && data.panel_armed_stay == true)
+  // Do not trust panel state for the messages above, it could be out of sync.
+  if (skipstate)
+    return events
 
-    def panel_state = (data.panel_ready ? "ready" : "notready")
+  def armed = data.panel_armed ||
+    (data.panel_armed_stay != null && data.panel_armed_stay == true)
 
-    // Update our ready status virtual device
-    if (forceguiUpdate || data.panel_ready != state.panel_ready)
-      events << createEvent(
-        name: "ready-set",
-        value: (data.panel_ready ? "on" : "off"),
-        displayed: true,
-        isStateChange: true)
+  def panel_state = (data.panel_ready ? "ready" : "notready")
 
-    // If armed update internal UI state to exit mode and armed state
-    if (armed) {
-      if (data.panel_exit) {
-        if (data.panel_armed_stay) {
-          panel_state = "armed_stay_exit"
-          if (data.panel_entry_delay_off == false && data.panel_perimeter_only == true)
-            panel_state = "armed_night_exit"
-        } else {
-          panel_state = "armed_exit"
-        }
-      } else {
-        if (data.panel_armed_stay && data.panel_entry_delay_off == false && data.panel_perimeter_only == true)
-          panel_state = "armed_night"
-        else
-          panel_state = (data.panel_armed_stay ? "armed_stay" : "armed")
-      }
-    }
+  // Update our ready status virtual device
+  if (forceguiUpdate || data.panel_ready != state.panel_ready)
+    events << createEvent(name: "ready-set", value: (data.panel_ready ? "on" : "off"), isStateChange: true)
 
-    // FORCE ARMED if ALARMING to be sure MONITOR gets it as it will
-    // not show alarms if not armed :(
-    if (data.panel_alarming) {
-      panel_state = "alarming"
-    }
-
-    // NOTE: Fire overrides alarm since it's definitely more serious.
-    if (data.panel_fire_detected) {
-      panel_state = "fire"
-    }
-
-    // Update our Smoke Sensor virtual device that MONITOR or
-    // others the current state.
-    if (forceguiUpdate || data.panel_fire_detected != state.panel_fire_detected)
-      events << createEvent(
-        name: "smoke-set",
-        value: (data.panel_fire_detected ? "detected" : "clear"),
-        displayed: true,
-        isStateChange: true)
-
-    // If armed STAY changes data.panel_armed_stay
-	if (forceguiUpdate || data.panel_armed_stay != state.panel_armed_stay) {
+  // If armed update internal UI state to exit mode and armed state
+  if (armed) {
+    if (data.panel_exit) {
       if (data.panel_armed_stay) {
-	  
-		if (data.panel_entry_delay_off == false && data.panel_perimeter_only)
-		{
-			events << createEvent(
-			  name: "arm-stay-set",
-			  value: "off",
-			  displayed: true,
-			  isStateChange: true)
-			events << createEvent(
-			  name: "arm-away-set",
-			  value: "off",
-			  displayed: true,
-			  isStateChange: true)
-			events << createEvent(
-			  name: "arm-night-set",
-			  value: "on",
-			  displayed: true,
-			  isStateChange: true)
-		}
-		else
-		{
-			events << createEvent(
-			  name: "arm-stay-set",
-			  value: "on",
-			  displayed: true,
-			  isStateChange: true)
-			events << createEvent(
-			  name: "arm-away-set",
-			  value: "off",
-			  displayed: true,
-			  isStateChange: true)
-			events << createEvent(
-			  name: "arm-night-set",
-			  value: "off",
-			  displayed: true,
-			  isStateChange: true)
-	    }
-      }
-    }
-
-    // If the panel ARMED state changes
-    if (forceguiUpdate || armed != state.armed) {
-      if (!armed) {
-        events << createEvent(
-          name: "arm-away-set",
-          value: "off",
-          displayed: true,
-          isStateChange: true)
-        events << createEvent(
-          name: "arm-stay-set",
-          value: "off",
-          displayed: true,
-          isStateChange: true)
-		events << createEvent(
-          name: "arm-night-set",
-          value: "off",
-          displayed: true,
-          isStateChange: true)
-        events << createEvent(
-          name: "disarm-set",
-          value: "off",
-          displayed: true,
-          isStateChange: true)
+        panel_state = "armed_stay_exit"
+        if (data.panel_entry_delay_off == false && data.panel_perimeter_only == true)
+          panel_state = "armed_night_exit"
       } else {
-        // If armed AWAY changes data.panel_armed_away
-        if (!data.panel_armed_stay)
-          events << createEvent(
-            name: "arm-away-set",
-            value: "on",
-            displayed: true,
-            isStateChange: true)
-        events << createEvent(
-          name: "disarm-set",
-          value: "on",
-          displayed: true,
-          isStateChange: true)
+        panel_state = "armed_exit"
       }
+    } else {
+      if (data.panel_armed_stay && data.panel_entry_delay_off == false && data.panel_perimeter_only == true)
+        panel_state = "armed_night"
+      else
+        panel_state = (data.panel_armed_stay ? "armed_stay" : "armed")
     }
-
-    // If Update exit state
-    if (forceguiUpdate || data.panel_exit != state.panel_exit) {
-      events << createEvent(
-        name: "exit-set",
-        value: (data.panel_exit ? "on" : "off"),
-        displayed: true,
-        isStateChange: true)
-    }
-
-    // If Update perimeter only device
-    if (forceguiUpdate ||
-      data.panel_perimeter_only != state.panel_perimeter_only) {
-      events << createEvent(
-        name: "perimeter-only-set",
-        value: (data.panel_perimeter_only ? "on" : "off"),
-        displayed: true,
-        isStateChange: true)
-    }
-
-    // If Update entry delay off device
-    if (forceguiUpdate ||
-      data.panel_entry_delay_off != state.panel_entry_delay_off) {
-      events << createEvent(
-        name: "entry-delay-off-set",
-        value: (data.panel_entry_delay_off ? "on" : "off"),
-        displayed: true,
-        isStateChange: true)
-    }
-
-    // set our panel_state
-    if (forceguiUpdate || panel_state != state.panel_state) {
-      parent.logTrace("--- update_state: new state **** ${panel_state} ****")
-      events << createEvent(
-        name: "panel_state",
-        value: panel_state,
-        displayed: true,
-        isStateChange: true)
-    }
-
-    // build our alarm_status value
-    def alarm_status = "off"
-    if (armed) {
-      alarm_status = "away"
-      if (data.panel_armed_stay == true)
-	  {
-        alarm_status = "stay"
-        if (!data.panel_entry_delay_off && data.panel_perimeter_only)
-          alarm_status = "night"
-	  }
-    }
-
-    // Create an event to notify Smart Home Monitor in our service.
-    // "enum", ["off", "stay", "away"]
-    if (forceguiUpdate || alarm_status != state.alarm_status)
-      events << createEvent(
-        name: "alarmStatus",
-        value: alarm_status,
-        displayed: true,
-        isStateChange: true)
-
-    // Update our alarming switch so MONITORs know we are in an alarm state.
-    //  In alarm close contact.
-    // "enum", ["open", "closed"]
-    if (forceguiUpdate || data.panel_alarming != state.panel_alarming)
-      events << createEvent(
-        name: "alarmbell-set",
-        value: (data.panel_alarming ? "on" : "off"),
-        displayed: true,
-        isStateChange: true)
-
-    // will only add events for zones that change state.
-    def zone_events = build_zone_events(data)
-    events = events.plus(zone_events)
-
-    // Update our saved state
-    /// Calculated state enum
-    state.panel_state = panel_state
-    state.armed = armed
-
-    /// raw panel state bits
-    state.panel_ready = data.panel_ready
-    state.panel_armed = data.panel_armed
-    state.panel_armed_stay = data.panel_armed_stay
-    state.panel_exit = data.panel_exit
-    state.panel_fire_detected = data.panel_fire_detected
-    state.panel_alarming = data.panel_alarming
-    state.alarm_status = alarm_status
-    state.panel_powered = data.panel_powered
-    state.panel_on_battery = data.panel_on_battery
-    state.panel_ready = data.panel_ready
-    state.panel_chime = data.chime
-    state.panel_perimeter_only = data.panel_perimeter_only
-    state.panel_entry_delay_off = data.panel_entry_delay_off
-	state.panel_armed_night = data.panel_armed_stay && data.panel_perimeter_only && !data.panel_entry_delay_off
   }
+
+  // Alarming overrides armed state.
+  if (data.panel_alarming)
+    panel_state = "alarming"
+
+  // Fire overrides alarm since it's definitely more serious.
+  if (data.panel_fire_detected)
+    panel_state = "fire"
+
+  // Update the Smoke Alarm virtual device.
+  if (forceguiUpdate || data.panel_fire_detected != state.panel_fire_detected)
+    events << createEvent(name: "smoke-set", value: (data.panel_fire_detected ? "detected" : "clear"), isStateChange: true)
+
+  // If armed STAY changes
+  if (forceguiUpdate || data.panel_armed_stay != state.panel_armed_stay) {
+    if (data.panel_armed_stay) {
+      def night = (data.panel_entry_delay_off == false && data.panel_perimeter_only)
+      events << createEvent(name: "arm-stay-set", value: (night ? "off" : "on"), isStateChange: true)
+      events << createEvent(name: "arm-away-set", value: "off", isStateChange: true)
+      events << createEvent(name: "arm-night-set", value: (night ? "on" : "off"), isStateChange: true)
+    }
+  }
+
+  // If the panel ARMED state changes
+  if (forceguiUpdate || armed != state.armed) {
+    if (!armed) {
+      events << createEvent(name: "arm-away-set", value: "off", isStateChange: true)
+      events << createEvent(name: "arm-stay-set", value: "off", isStateChange: true)
+      events << createEvent(name: "arm-night-set", value: "off", isStateChange: true)
+      events << createEvent(name: "disarm-set", value: "off", isStateChange: true)
+    } else {
+      if (!data.panel_armed_stay)
+        events << createEvent(name: "arm-away-set", value: "on", isStateChange: true)
+      events << createEvent(name: "disarm-set", value: "on", isStateChange: true)
+    }
+    events << createEvent(name: "armed", value: (armed ? "armed" : "disarmed"))
+  }
+
+  // Exit state
+  if (forceguiUpdate || data.panel_exit != state.panel_exit)
+    events << createEvent(name: "exit-set", value: (data.panel_exit ? "on" : "off"), isStateChange: true)
+
+  // Perimeter only
+  if (forceguiUpdate || data.panel_perimeter_only != state.panel_perimeter_only)
+    events << createEvent(name: "perimeter-only-set", value: (data.panel_perimeter_only ? "on" : "off"), isStateChange: true)
+
+  // Entry delay off
+  if (forceguiUpdate || data.panel_entry_delay_off != state.panel_entry_delay_off)
+    events << createEvent(name: "entry-delay-off-set", value: (data.panel_entry_delay_off ? "on" : "off"), isStateChange: true)
+
+  // panel_state
+  if (forceguiUpdate || panel_state != state.panel_state) {
+    logTrace("update_state: new state **** ${panel_state} ****")
+    events << createEvent(name: "panel_state", value: panel_state, isStateChange: true)
+  }
+
+  // alarm_status value ["off", "stay", "away", "night"]
+  def alarm_status = "off"
+  if (armed) {
+    alarm_status = "away"
+    if (data.panel_armed_stay == true) {
+      alarm_status = "stay"
+      if (!data.panel_entry_delay_off && data.panel_perimeter_only)
+        alarm_status = "night"
+    }
+  }
+
+  // Notify the service (HSM integration) and update the keypad state.
+  if (forceguiUpdate || alarm_status != state.alarm_status) {
+    events << createEvent(name: "alarmStatus", value: alarm_status, isStateChange: true)
+  }
+  def keypad = keypadState(alarm_status)
+  if (device.currentValue("securityKeypad") != keypad)
+    events << createEvent(name: "securityKeypad", value: keypad, descriptionText: "${device.displayName} is ${keypad}")
+
+  // Alarm bell
+  if (forceguiUpdate || data.panel_alarming != state.panel_alarming)
+    events << createEvent(name: "alarmbell-set", value: (data.panel_alarming ? "on" : "off"), isStateChange: true)
+
+  // Only adds events for zones that change state.
+  events.addAll(build_zone_events(data))
+
+  // Save state
+  state.panel_state = panel_state
+  state.armed = armed
+  state.panel_ready = data.panel_ready
+  state.panel_armed = data.panel_armed
+  state.panel_armed_stay = data.panel_armed_stay
+  state.panel_exit = data.panel_exit
+  state.panel_fire_detected = data.panel_fire_detected
+  state.panel_alarming = data.panel_alarming
+  state.alarm_status = alarm_status
+  state.panel_powered = data.panel_powered
+  state.panel_on_battery = data.panel_on_battery
+  state.panel_chime = data.panel_chime
+  state.panel_perimeter_only = data.panel_perimeter_only
+  state.panel_entry_delay_off = data.panel_entry_delay_off
+  state.panel_armed_night = data.panel_armed_stay && data.panel_perimeter_only && !data.panel_entry_delay_off
+
   return events
+}
+
+private String keypadState(String alarm_status) {
+  switch (alarm_status) {
+    case "away": return "armed away"
+    case "stay": return "armed home"
+    case "night": return "armed night"
+    default: return "disarmed"
+  }
 }
 
 /*** Utility ***/
 
 /**
- * parse_json(String body)
- *
- * Parse json response data from a PULL request made to the
- * AlarmDecoder REST api into an event object and
- * send to update_state().
+ * Parse a JSON panel state from the REST API into events.
  */
 def parse_json(String body) {
   def events = []
+  if (!body)
+    return events
 
   try {
-    def slurper = new JsonSlurper()
-    def result = slurper.parseText(body)
-
-    // Build our events list from our current state
-    update_state(result).each {
-      e-> events << e
-    }
-
-    parent.logDebug("parse_json in:****** ${resultMap}")
-    parent.logDebug("parse_json out:****** ${events}")
-
+    def result = new JsonSlurper().parseText(body)
+    events = update_state(result)
+    logDebug("parse_json in: ${result}")
+    logDebug("parse_json out: ${events}")
   } catch (Exception e) {
     log.error("parse_json: Exception ${e}")
   }
@@ -1483,11 +742,7 @@ def parse_json(String body) {
 }
 
 /**
- * parse_xml(String body)
- *
- * Parse xml data from a UPNP PUSH message from the AlarmDecoder
- * push notification service into an event object and
- * send to update_state().
+ * Parse an XML UPnP push message into events.
  */
 def parse_xml(String body) {
   def events = []
@@ -1495,75 +750,45 @@ def parse_xml(String body) {
   try {
     def xmlResult = new XmlSlurper().parseText(body)
 
-    def resultMap = [: ]
-    resultMap['eventid'] =
-      xmlResult.property.eventid.toInteger()
-    resultMap['eventdesc'] =
-      xmlResult.property.eventdesc.text()
-    resultMap['eventmessage'] =
-      xmlResult.property.eventmessage.text()
-    resultMap['rawmessage'] =
-      xmlResult.property.rawmessage.text()
-    resultMap['last_message_received'] =
-      xmlResult.property.panelstate.last_message_received.text()
-    resultMap['panel_alarming'] =
-      xmlResult.property.panelstate.panel_alarming.toBoolean()
-    resultMap['panel_armed'] =
-      xmlResult.property.panelstate.panel_armed.toBoolean()
-    resultMap['panel_armed_stay'] =
-      xmlResult.property.panelstate.panel_armed_stay.toBoolean()
-    resultMap['panel_exit'] =
-      xmlResult.property.panelstate.panel_exit.toBoolean()
-    resultMap['panel_bypassed'] =
-      xmlResult.property.panelstate.panel_bypassed.toBoolean()
-    resultMap['panel_fire_detected'] =
-      xmlResult.property.panelstate.panel_fire_detected.toBoolean()
-    resultMap['panel_on_battery'] =
-      xmlResult.property.panelstate.panel_on_battery.toBoolean()
-    resultMap['panel_panicked'] =
-      xmlResult.property.panelstate.panel_panicked.toBoolean()
-    resultMap['panel_powered'] =
-      xmlResult.property.panelstate.panel_powered.toBoolean()
-    resultMap['panel_ready'] =
-      xmlResult.property.panelstate.panel_ready.toBoolean()
-    resultMap['panel_entry_delay_off'] =
-      xmlResult.property.panelstate.panel_entry_delay_off.toBoolean()
-    resultMap['panel_perimeter_only'] =
-      xmlResult.property.panelstate.panel_perimeter_only.toBoolean()
-    resultMap['panel_type'] =
-      xmlResult.property.panelstate.panel_type.text()
-    resultMap['panel_chime'] =
-      xmlResult.property.panelstate.panel_chime.toBoolean()
+    def resultMap = [:]
+    resultMap['eventid'] = xmlResult.property.eventid.toInteger()
+    resultMap['eventdesc'] = xmlResult.property.eventdesc.text()
+    resultMap['eventmessage'] = xmlResult.property.eventmessage.text()
+    resultMap['rawmessage'] = xmlResult.property.rawmessage.text()
+    resultMap['last_message_received'] = xmlResult.property.panelstate.last_message_received.text()
+    resultMap['panel_alarming'] = xmlResult.property.panelstate.panel_alarming.toBoolean()
+    resultMap['panel_armed'] = xmlResult.property.panelstate.panel_armed.toBoolean()
+    resultMap['panel_armed_stay'] = xmlResult.property.panelstate.panel_armed_stay.toBoolean()
+    resultMap['panel_exit'] = xmlResult.property.panelstate.panel_exit.toBoolean()
+    resultMap['panel_bypassed'] = xmlResult.property.panelstate.panel_bypassed.toBoolean()
+    resultMap['panel_fire_detected'] = xmlResult.property.panelstate.panel_fire_detected.toBoolean()
+    resultMap['panel_on_battery'] = xmlResult.property.panelstate.panel_on_battery.toBoolean()
+    resultMap['panel_panicked'] = xmlResult.property.panelstate.panel_panicked.toBoolean()
+    resultMap['panel_powered'] = xmlResult.property.panelstate.panel_powered.toBoolean()
+    resultMap['panel_ready'] = xmlResult.property.panelstate.panel_ready.toBoolean()
+    resultMap['panel_entry_delay_off'] = xmlResult.property.panelstate.panel_entry_delay_off.toBoolean()
+    resultMap['panel_perimeter_only'] = xmlResult.property.panelstate.panel_perimeter_only.toBoolean()
+    resultMap['panel_type'] = xmlResult.property.panelstate.panel_type.text()
+    resultMap['panel_chime'] = xmlResult.property.panelstate.panel_chime.toBoolean()
 
-    // build list of faulted zones unpack xml
-    // only update zone list on zone change events
-    // <eventmessage>
-    //   <![CDATA[Zone <unnamed> (9) has been faulted.]]>
-    // </eventmessage>
+    // Only update the zone list on zone change events:
+    // <eventmessage><![CDATA[Zone <unnamed> (9) has been faulted.]]></eventmessage>
     if (xmlResult.property.eventmessage.text().startsWith('Zone ')) {
       def zones = []
-      xmlResult.property.panelstate.panel_zones_faulted.z.each {
-        e-> zones << e.toInteger()
-      }
+      xmlResult.property.panelstate.panel_zones_faulted.z.each { e -> zones << e.toInteger() }
       resultMap['panel_zones_faulted'] = zones
     }
 
-    // unpack the relay xml
     def relays = []
-    xmlResult.property.panelstate.panel_relay_status.r.each {
-      e->
-        relays << ['address': e.a, 'channel': e.c, 'value': e.v]
+    xmlResult.property.panelstate.panel_relay_status.r.each { e ->
+      relays << ['address': e.a, 'channel': e.c, 'value': e.v]
     }
     resultMap['panel_relay_status'] = relays
 
-    // Build our events list from our current state
-    update_state(resultMap).each {
-      e-> events << e
-    }
+    events = update_state(resultMap)
 
-    parent.logDebug("parse_xml in:****** ${resultMap}")
-    parent.logDebug("parse_xml out:****** ${events}")
-
+    logDebug("parse_xml in: ${resultMap}")
+    logDebug("parse_xml out: ${events}")
   } catch (Exception e) {
     log.error("parse_xml: Exception ${e}")
   }
@@ -1572,106 +797,89 @@ def parse_xml(String body) {
 }
 
 /**
- * subscribeNotifications()
- *
- * Send a SUBSCRIBE request to the AlarmDecoder UPNP notification service.
- * To receive event PUSH notifications.
- *
- * Note:
- *  Be sure to enable the AlarmDecoder UPNP notification service.
- *
- * FIXME: Need to get this from the eventSubURL in the
- * ssdpPath: /static/device_description.xml
+ * Send a SUBSCRIBE request to the AlarmDecoder UPnP notification service so
+ * it pushes panel events to the hub. Renewed every 5 minutes; also used as
+ * a connection health check.
  */
 def subscribeNotifications() {
-  parent.logTrace "--- subscribeNotifications: ${getDataValue("urn")}"
+  String urn = getDataValue("urn")
+  logTrace("subscribeNotifications: ${urn}")
 
-  // Get our HUBs address details for callbacks.
-  def address = parent.getHubURN()
+  checkContactTimeout()
 
-  // Build the SUBSCRIBE request.
-  def obj = [
+  if (!urn || !_get_api_key()) {
+    log.warn("${device.displayName}: not subscribing, missing address or API key")
+    return
+  }
+
+  String hubAddress = "${location.hub.localIP}:${HUB_LAN_PORT}"
+
+  def params = [
     method: "SUBSCRIBE",
     path: "/api/v1/alarmdecoder/event?apikey=${_get_api_key()}",
     headers: [
-      HOST: getDataValue("urn"),
-      CALLBACK: "<http://${address}/notify${callbackPath}>",
+      HOST: urn,
+      CALLBACK: "<http://${hubAddress}/notify>",
       NT: "upnp:event",
       TIMEOUT: "Second-28800"
     ]
   ]
 
-  // Build the HubAction object.
-  def ha = parent.getHubAction(obj, address)
-
-  // Tag the HubAction message. It will return in the event handler parse().
-  // FIXME: Add some security test.
-  if (parent.isSmartThings())
-    ha.requestId = "SUBSCRIBE"
-
-  sendHubCommand(ha)
+  try {
+    sendHubCommand(new hubitat.device.HubAction(params, device.deviceNetworkId, [callback: "handleSubscribeResponse"]))
+  } catch (e) {
+    connectionFailed("subscribe: ${e}")
+  }
 }
 
+def handleSubscribeResponse(hubResponse) {
+  def status = hubResponse?.status
+  if (status != null && status >= 200 && status < 300) {
+    logDebug("subscribe ok: ${hubResponse?.headers}")
+    markOnline()
+  } else {
+    log.warn("${device.displayName}: SUBSCRIBE returned status ${status}")
+  }
+}
 
 /**
- * build_zone_events(data)
- *
- * Parse the zone events and return a list of events
- * for each zone filtered to report only events with
- * a changes in state.
+ * Build zone events for zones that changed state, plus the zone status
+ * attributes shown on dashboards.
  */
 private def build_zone_events(data) {
   def events = []
 
-  // TODO: probably remove this.
   if (state.faulted_zones == null)
     state.faulted_zones = []
 
-  // If we have no tag then do nothing.
   def current_faults = data.panel_zones_faulted
   if (current_faults == null)
     return events
 
   def number_of_zones_faulted = current_faults.size()
-
   def new_faults = current_faults.minus(state.faulted_zones)
   def cleared_faults = state.faulted_zones.minus(current_faults)
 
-  parent.logTrace("Current faulted zones: ${current_faults}")
-  parent.logTrace("New faults: ${new_faults}")
-  parent.logTrace("Cleared faults: ${cleared_faults}")
+  logTrace("Current faulted zones: ${current_faults}")
+  logTrace("New faults: ${new_faults}")
+  logTrace("Cleared faults: ${cleared_faults}")
 
-  // Trigger switches for newly faulted zones.
-  for (def i = 0; i < new_faults.size(); i++) {
-    parent.logTrace("Setting switch ${new_faults[i]}")
-    def switch_events = update_zone_switch(new_faults[i], true)
-    events = events.plus(switch_events)
+  new_faults.each { zone ->
+    events << createEvent(name: "zone-on", value: zone, isStateChange: true)
+  }
+  cleared_faults.each { zone ->
+    events << createEvent(name: "zone-off", value: zone, isStateChange: true)
   }
 
-  // Reset switches for cleared zones.
-  for (def i = 0; i < cleared_faults.size(); i++) {
-    parent.logTrace("Clearing switch ${cleared_faults[i]}")
-    def switch_events = update_zone_switch(cleared_faults[i], false)
-    events = events.plus(switch_events)
-  }
+  String faultList = current_faults.join(",")
+  if (device.currentValue("faultedZones") != faultList)
+    events << createEvent(name: "faultedZones", value: faultList)
 
-  // FIXME: refactor to remove MAX_ZONE_FAULT_TILES
-  // Populate AlarmDecoder UI zone tiles
-  for (def i = 1; i <= MAX_ZONE_FAULT_TILES; i++) {
-    if (number_of_zones_faulted > 0 && i <= number_of_zones_faulted) {
-      def d = (device.currentValue("zoneStatus${i}") ?: "0")
-      if (d.toInteger() != current_faults[i - 1])
-        events << createEvent(
-          name: "zoneStatus${i}",
-          value: current_faults[i - 1],
-          displayed: true)
-    } else {
-      if (device.currentValue("zoneStatus${i}") != null)
-        events << createEvent(
-          name: "zoneStatus${i}",
-          value: "",
-          displayed: true)
-    }
+  for (int i = 1; i <= MAX_ZONE_FAULT_TILES; i++) {
+    def current = device.currentValue("zoneStatus${i}")?.toString() ?: ""
+    def wanted = (i <= number_of_zones_faulted) ? current_faults[i - 1].toString() : ""
+    if (current != wanted)
+      events << createEvent(name: "zoneStatus${i}", value: wanted)
   }
 
   state.faulted_zones = current_faults
@@ -1680,114 +888,107 @@ private def build_zone_events(data) {
 }
 
 /**
- * update_zone_switch(zone, faulted)
- *
- * Send a zone update event to the AlarmDecoder service for processing.
- * This sends the raw zone number and it is up to the service to route
- * this event to the correct virtual switch.
- *
- */
-private def update_zone_switch(zone, faulted) {
-  def events = []
-
-  if (faulted) {
-    events << createEvent(
-      name: "zone-on",
-      value: zone,
-      isStateChange: true,
-      displayed: false
-    )
-  } else {
-    events << createEvent(
-      name: "zone-off",
-      value: zone,
-      isStateChange: true,
-      displayed: false
-    )
-  }
-
-  return events
-}
-
-/**
- * send_keys(keys)
- *
- * Build a GET request HubAction object to call the
- * AlarmDecoder REST api send command.
+ * POST keys to the AlarmDecoder REST API.
  */
 def send_keys(String keys) {
-  parent.logTrace("--- send_keys: keys=${keys}")
+  if (!keys) {
+    log.warn("${device.displayName}: no keys to send")
+    return
+  }
 
-  def urn = getDataValue("urn")
-  def apikey = _get_api_key()
+  logTrace("send_keys: keys=${maskCode(keys)}")
 
-  return hub_http_post(
-    urn,
-    "/api/v1/alarmdecoder/send?apikey=${apikey}",
-    """{ "keys": "${keys}" }"""
-  )
+  String urn = getDataValue("urn")
+  if (!urn || !_get_api_key()) {
+    log.warn("${device.displayName}: cannot send keys, missing address or API key")
+    return
+  }
+
+  try {
+    asynchttpPost(
+      "handleSendKeysResponse",
+      [
+        uri: "http://${urn}",
+        path: "/api/v1/alarmdecoder/send",
+        query: [apikey: _get_api_key()],
+        requestContentType: "application/json",
+        body: [keys: keys],
+        timeout: HTTP_TIMEOUT_SECONDS
+      ],
+      [keys: maskCode(keys)]
+    )
+  } catch (e) {
+    connectionFailed("send_keys: ${e}")
+  }
 }
 
-/**
- * hub_http_get()
- *
- * Build a GET request HubAction object.
- */
-def hub_http_get(host, path) {
-  parent.logTrace "--- hub_http_get: host=${host}, path=${path}"
-
-  def httpRequest = [
-    method: "GET",
-    path: path,
-    headers: [HOST: host]
-  ]
-
-  return parent.getHubAction(httpRequest, host)
+def handleSendKeysResponse(resp, data) {
+  if (resp.hasError()) {
+    log.error("${device.displayName}: failed to send keys ${data?.keys}: " +
+      "status ${resp.status} ${resp.getErrorMessage()}")
+    connectionFailed("send_keys failed")
+    return
+  }
+  logDebug("send_keys ok: ${data?.keys}")
+  markOnline()
 }
 
-/**
- * hub_http_post()
- *
- * Build a POST request HubAction object.
- */
-def hub_http_post(host, path, body) {
-  parent.logTrace "--- hub_http_post: host=${host}, path=${path} body=${body}"
+/*** Connection health ***/
 
-  def httpRequest = [
-    method: "POST",
-    path: path,
-    headers: [HOST: host, "Content-Type": "application/json"],
-    body: body
-  ]
-
-  return parent.getHubAction(httpRequest, host)
+private void markOnline() {
+  state.lastContact = now()
+  sendEvent(name: "lastContact", value: new Date().format("yyyy-MM-dd HH:mm:ss", location.timeZone ?: TimeZone.getDefault()))
+  if (device.currentValue("networkStatus") != "online") {
+    log.info("${device.displayName}: connected to ${getDataValue('urn')}")
+    sendEvent(name: "networkStatus", value: "online")
+  }
 }
 
-/**
- * _get_user_code()
- *
- * Internal routine to return the current user_code setting
- * for the connected AlarmDecoder WEBAPP
- */
+private void connectionFailed(String reason) {
+  log.warn("${device.displayName}: ${reason}")
+  if (device.currentValue("networkStatus") != "offline")
+    sendEvent(name: "networkStatus", value: "offline", descriptionText: reason)
+  // Ask the service to look for the appliance at a new address.
+  parent?.rediscover()
+}
+
+private void checkContactTimeout() {
+  def last = state.lastContact
+  if (last != null && now() - (last as Long) > CONTACT_TIMEOUT_MS)
+    connectionFailed("no contact from the AlarmDecoder for more than ${CONTACT_TIMEOUT_MS / 60000} minutes")
+}
+
+private String headerValue(headers, String name) {
+  if (!(headers instanceof Map))
+    return null
+  def entry = headers.find { k, v -> k?.toString()?.equalsIgnoreCase(name) }
+  return entry?.value?.toString()
+}
+
+private String maskCode(String keys) {
+  def code = _get_user_code()?.toString()
+  return (code && keys) ? keys.replace(code, "****") : keys
+}
+
 def _get_user_code() {
   return settings.user_code
 }
 
-/**
- * _get_api_key()
- *
- * Internal routine to return the current REST api key setting
- * for the connected AlarmDecoder WEBAPP
- */
 def _get_api_key() {
   return settings.api_key
 }
 
 /**
- * getStateValue(key)
- *
- * helper parent access to state.
+ * Helper for parent access to state.
  */
 def getStateValue(key) {
   return state[key]
+}
+
+private void logDebug(msg) {
+  parent?.logDebug(msg)
+}
+
+private void logTrace(msg) {
+  parent?.logTrace(msg)
 }
